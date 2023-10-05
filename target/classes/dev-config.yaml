@@ -1,0 +1,9 @@
+sfdc:
+  username: ""
+  password: ""
+  securityToken: ""
+  
+fileLocation:
+   filePath: ""
+   mergedFilePath: ""
+

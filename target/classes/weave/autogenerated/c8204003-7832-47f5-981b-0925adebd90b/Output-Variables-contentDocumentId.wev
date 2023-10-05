@@ -1,0 +1,11 @@
+%dw 2.0
+
+type auto_c8204003_7832_47f5_981b_0925adebd90b_Output_Variables_contentDocumentId = Array<ContentDocumentLink>
+type ContentDocumentLink = {|
+  ContentDocumentId?: String, 
+  LinkedEntityId?: String
+|} {"label": "Content Document Link",
+"typeId": "ContentDocumentLink"}
+
+
+

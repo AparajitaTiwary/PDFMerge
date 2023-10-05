@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:java="http://www.mulesoft.org/schema/mule/java" xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:file="http://www.mulesoft.org/schema/mule/file"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:os="http://www.mulesoft.org/schema/mule/os" xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/java http://www.mulesoft.org/schema/mule/java/current/mule-java.xsd">
+	<salesforce:sfdc-config name="Salesforce_Config" doc:name="Salesforce Config" doc:id="ec77ee77-e587-4060-b7bb-9671ffc036e4" >
+		<salesforce:basic-connection username="${sfdc.username}" password="${sfdc.password}" securityToken="${sfdc.securityToken}" />
+	</salesforce:sfdc-config>
+	<configuration-properties doc:name="Configuration properties" doc:id="34d54369-5c3d-4ef6-9904-d77c1832c0ca" file="config.properties" />
+	<os:object-store name="SFDCTimestamp" doc:name="Object store" doc:id="5fd1525c-1a70-450e-b35c-4455aad5a1d7" />
+	<file:config name="File_Config" doc:name="File Config" doc:id="4bc04305-25a3-4be8-a195-86f8f70cd241" />
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="a3ea4029-42c1-421b-b8a5-01c76add9e3c" >
+		<http:listener-connection host="0.0.0.0" port="8081" />
+	</http:listener-config>
+	<configuration-properties doc:name="Configuration properties" doc:id="9b9b0bfb-b056-416a-9393-a6d597dd8483" file="dev-config.yaml" />
+	<flow name="salesforcetosftpFlow" doc:id="fe15f988-e5cc-4936-86ed-44e9efe44a1a" >
+		<http:listener doc:name="Listener" doc:id="e005192a-41a9-4fd8-b1ff-4ec1f5a1be55" config-ref="HTTP_Listener_config" path="/pdf"/>
+		<logger level="INFO" doc:name="Logger" doc:id="613f626a-0f8e-4466-9014-d9471d926154" message="Scheduler started"/>
+		<os:retrieve doc:name="Retrieve" doc:id="4993f6ad-eb22-4e5f-8b1c-f48ec141aae8" key="lastTimestamp" objectStore="SFDCTimestamp" target="lastTimestamp">
+			<os:default-value ><![CDATA[#[read(p('watermark.default.expression'))]]]></os:default-value>
+		</os:retrieve>
+		<salesforce:query doc:name="Query" doc:id="b2f98028-2879-4e1c-834d-7aa600d8c6bc" config-ref="Salesforce_Config">
+			<salesforce:salesforce-query ><![CDATA[SELECT Id FROM Case WHERE lastModifiedDate > :lastTimestamp]]></salesforce:salesforce-query>
+			<salesforce:parameters ><![CDATA[#[output application/java
+---
+{
+	"lastTimestamp" : vars.lastTimestamp
+}]]]></salesforce:parameters>
+		</salesforce:query>
+		<choice doc:name="Choice" doc:id="4ac6e3c7-1fc1-4a32-b703-8bbc4930f491" >
+			<when expression="#[payload.Id[0] != null]">
+				<salesforce:query doc:name="Query" doc:id="bf287fe5-27a2-4dc9-8534-1b70430d66e9" config-ref="Salesforce_Config" target="contentDocumentId">
+					<salesforce:salesforce-query ><![CDATA[SELECT ContentDocumentId, LinkedEntityId FROM ContentDocumentLink WHERE LinkedEntityId = ':LinkedEntityId' AND LinkedEntity.Type = 'Case']]></salesforce:salesforce-query>
+					<salesforce:parameters ><![CDATA[#[output application/java
+---
+{
+	"LinkedEntityId" : payload[0].Id
+}]]]></salesforce:parameters>
+				</salesforce:query>
+				<choice doc:name="Choice" doc:id="4a5b64f6-5b44-4ab0-ab7d-9e5d74bc94d9" >
+					<when expression="#[vars.contentDocumentId.ContentDocumentId !=null]">
+						<foreach doc:name="For Each" doc:id="82668fc2-3aa5-405e-91ad-da62e1d30cad" collection="#[vars.contentDocumentId]">
+							<salesforce:query doc:name="Query" doc:id="9d929373-f2ee-4833-a073-9ed27d65b2e3" config-ref="Salesforce_Config">
+							<salesforce:salesforce-query><![CDATA[SELECT VersionData, FileExtension FROM ContentVersion WHERE ContentDocumentId = ':ContentDocumentId' AND IsLatest = TRUE]]></salesforce:salesforce-query>
+								<salesforce:parameters ><![CDATA[#[output application/java
+---
+{
+	"ContentDocumentId" : payload.ContentDocumentId
+}]]]></salesforce:parameters>
+						</salesforce:query>
+							<ee:transform doc:name="Transform Message" doc:id="f4cc0484-c3c8-4a1d-a5d6-f4b79dd33813">
+							<ee:message>
+								<ee:set-payload><![CDATA[%dw 2.0
+import * from dw::core::Binaries
+output multipart/form-data
+---
+{
+    parts:{
+        base64Content:{
+            headers:{
+                "Content-Type":"application/pdf"
+            },
+            content: fromBase64(payload[0].VersionData)
+            },
+        }
+}
+
+]]></ee:set-payload>
+							</ee:message>
+						</ee:transform>
+							<set-payload value="#[payload]" doc:name="Set Payload" doc:id="e5610654-4d7b-4741-a30c-98daf48c6e70" mimeType="application/pdf" />
+							<file:write doc:name="Write" doc:id="f71261db-68ff-489b-bcca-dd41f2865b94" mode="CREATE_NEW" path="#[p('fileLocation.filePath') ++ &quot;Test&quot; ++ random() ++ &quot;.pdf&quot;]" />
+							<logger level="INFO" doc:name="Logger" doc:id="0ed79e80-01af-4373-b81e-146c7802cf69" message="#[payload]" />
+						</foreach>
+						<flow-ref doc:name="call pdf merge flow" doc:id="59ae5264-b740-4494-9f91-6205064d2fa6" name="mergePDFFlow"/>
+					</when>
+					<otherwise >
+						<logger level="INFO" doc:name="Logger" doc:id="8a4ae184-04da-48fd-8d63-621a7d73dc48" message="-----do nothing------"/>
+					</otherwise>
+				</choice>
+			</when>
+			<otherwise >
+				<logger level="INFO" doc:name="Logger" doc:id="9421db26-6b05-4582-82e3-6ca9bb00a1fa" message="----do nothing-----"/>
+			</otherwise>
+		</choice>
+	</flow>
+	<flow name="mergePDFFlow" doc:id="c8204003-7832-47f5-981b-0925adebd90b" >
+		<logger level="INFO" doc:name="Logger" doc:id="3f118900-daa6-45d4-8b8d-b933c363df0a" message="merge PDF flow started"/>
+		<file:list doc:name="List" doc:id="ff9bf530-42d2-43ac-9265-7ee1021d74ff" directoryPath="#[p('fileLocation.filePath')]" target="fileList" targetValue="#[payload.attributes.path]">
+			<file:matcher filenamePattern="*.pdf" directories="EXCLUDE" symLinks="EXCLUDE"/>
+		</file:list>
+		<ee:transform doc:name="Transform Message" doc:id="ff543ede-0a22-45ce-bd3c-e6ceda41bd03" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+vars.fileList]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<ee:transform doc:name="mergedFilePath" doc:id="72d2d940-ce57-4867-a86b-7b60a716b044" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="mergedFilePath" ><![CDATA[%dw 2.0
+output application/json
+---
+p('fileLocation.mergedFilePath') ++ "Test" ++ random() ++ ".pdf"]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<set-variable value='#[{&#10;	"listPDFFileNames" : payload,&#10;	"mergedPDFFileName" : vars.mergedFilePath&#10;}]' doc:name="mergePDF" doc:id="e9341edb-8fc8-44dd-8f67-e8ab8518375d" variableName="mergePDF" />
+		<java:invoke-static doc:name="invoke merge PDF method" doc:id="29945dde-212a-44da-9060-5a939cd612a2" class="com.learning.mulesoft.FileOperations" method="mergePDF(java.lang.String[],java.lang.String)">
+			<java:args ><![CDATA[#[vars.mergePDF]]]></java:args>
+		</java:invoke-static>
+		<logger level="INFO" doc:name="Logger" doc:id="89922ebe-4751-41f1-bd34-bcc64d9f3a5b" message="#[payload]"/>
+	</flow>
+</mule>

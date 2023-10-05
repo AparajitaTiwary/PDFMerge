@@ -1,0 +1,8 @@
+%dw 2.0
+
+type auto_c8204003_7832_47f5_981b_0925adebd90b_Input_Payload = Array<Case>
+type Case = {| Id?: String {"typeId": "Id"} |} {"label": "Case",
+"typeId": "Case"}
+
+
+
